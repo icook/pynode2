@@ -75,16 +75,22 @@ class NodeConn(Greenlet):
 
         self.log.info("Connected to {}:{}"
                       .format(self.dstaddr, self.dstport))
-        while True:
-            try:
-                t = self.sock.recv(8192)
-                if len(t) <= 0:
-                    raise ValueError
-            except (IOError, ValueError):
-                self.handle_close()
-                return
-            self.recvbuf += t
-            self.got_data()
+        try:
+            while True:
+                try:
+                    t = self.sock.recv(8192)
+                    if len(t) <= 0:
+                        raise ValueError
+                except (IOError, ValueError):
+                    self.handle_close()
+                    return
+                self.recvbuf += t
+                self.got_data()
+        except Exception:
+            self.log.error(
+                "Connection to peer crashed! {}:{}, ver {}"
+                .format(self.dstaddr, self.dstport, self.ver_send), exc_info=True)
+            self.handle_close()
 
     def handle_close(self):
         self.log.info("Closed connection to {}:{}"
@@ -119,8 +125,8 @@ class NodeConn(Greenlet):
 
             if command in messages.messagemap:
                 f = cStringIO.StringIO(msg)
-                t = messages.messagemap[command](self.ver_recv)
-                t.msg_deser(f)
+                cls = messages.messagemap[command]
+                t = cls.msg_deser(f, protover=self.ver_send)
                 self.got_message(t)
             else:
                 self.log.warn("UNKNOWN COMMAND %s %s" % (command, repr(msg)))
@@ -218,10 +224,12 @@ class NodeConn(Greenlet):
         elif message.command == "tx":
             if self.chaindb.tx_is_orphan(message.tx):
                 self.log.info(
-                    "MemPool: Ignoring orphan TX %064x" % (message.tx.sha256,))
+                    "MemPool: Ignoring orphan TX {}"
+                    .format(message.tx.GetHash().encode('hex')))
             elif not self.chaindb.tx_signed(message.tx, None, True):
                 self.log.info(
-                    "MemPool: Ignoring failed-sig TX %064x" % (message.tx.sha256,))
+                    "MemPool: Ignoring failed-sig TX {}"
+                    .format(message.tx.GetHash().encode('hex')))
             else:
                 self.mempool.add(message.tx)
 
