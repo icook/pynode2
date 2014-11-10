@@ -22,7 +22,6 @@ import logging
 import argparse
 import signal
 
-import bitcoin.core.serialize as serialize
 import bitcoin.messages as messages
 import bitcoin.net as net
 
@@ -47,8 +46,8 @@ class NodeConn(Greenlet):
         self.dstport = dstport
         self.sock = gevent.socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.recvbuf = ""
-        self.ver_send = None
-        self.ver_recv = None
+        self.ver_send = self.params.MIN_PROTO_VERSION
+        self.ver_recv = self.params.MIN_PROTO_VERSION
         self.last_sent = 0
         self.getblocks_ok = True
         self.last_block_rx = time.time()
@@ -57,7 +56,8 @@ class NodeConn(Greenlet):
         self.hash_continue = None
 
     def _run(self):
-        self.log.info("Connecting")
+        self.log.info("Connecting to {}:{}"
+                      .format(self.dstaddr, self.dstport))
         try:
             self.sock.connect((self.dstaddr, self.dstport))
         except:
@@ -73,21 +73,22 @@ class NodeConn(Greenlet):
         vt.strSubVer = MY_SUBVERSION
         self.send_message(vt)
 
-        self.log.info(self.dstaddr + " connected")
+        self.log.info("Connected to {}:{}"
+                      .format(self.dstaddr, self.dstport))
         while True:
             try:
                 t = self.sock.recv(8192)
                 if len(t) <= 0:
                     raise ValueError
             except (IOError, ValueError):
-                self.log.info(self.dstaddr + " disconnected")
                 self.handle_close()
                 return
             self.recvbuf += t
             self.got_data()
 
     def handle_close(self):
-        self.log.info(self.dstaddr + " close")
+        self.log.info("Closed connection to {}:{}"
+                      .format(self.dstaddr, self.dstport))
         self.recvbuf = ""
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
@@ -119,7 +120,7 @@ class NodeConn(Greenlet):
             if command in messages.messagemap:
                 f = cStringIO.StringIO(msg)
                 t = messages.messagemap[command](self.ver_recv)
-                t.deserialize(f)
+                t.msg_deser(f)
                 self.got_message(t)
             else:
                 self.log.warn("UNKNOWN COMMAND %s %s" % (command, repr(msg)))
@@ -172,6 +173,10 @@ class NodeConn(Greenlet):
                               (self.ver_send,))
                 self.handle_close()
                 return
+
+            if (self.ver_send >= self.params.NOBLKS_VERSION_START and
+                    self.ver_send <= self.params.NOBLKS_VERSION_END):
+                self.getblocks_ok = False
 
             self.remote_height = message.nStartingHeight
             self.send_message(messages.msg_verack(self.ver_send))
@@ -453,7 +458,12 @@ class Manager(object):
         gevent.signal(signal.SIGINT, exit, "SIGINT")
         gevent.signal(signal.SIGTERM, exit, "SIGTERM")
 
-        gevent.wait()
+        #gevent.wait()
+        while True:
+            gevent.sleep(3)
+            self.log.info("Connected to {} peers"
+                          .format(len(self.peermgr.peers)))
+
         self.log.info("PyNode EXIT")
         self.log.info("=" * 100)
 
