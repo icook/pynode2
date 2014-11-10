@@ -34,6 +34,7 @@ def block_value(height, fees):
 
 
 class Cache(object):
+
     def __init__(self, max=1000):
         self.d = {}
         self.l = []
@@ -445,7 +446,8 @@ class ChainDb(object):
         return True
 
     def disconnect_block(self, block):
-        ser_prevhash = serialize.uint256VectorSerializer.serialize(block.hashPrevBlock)
+        ser_prevhash = serialize.uint256VectorSerializer.serialize(
+            block.hashPrevBlock)
         prevmeta = BlkMeta()
         prevmeta.deserialize(self.db.Get('blkmeta:' + ser_prevhash))
 
@@ -581,7 +583,8 @@ class ChainDb(object):
         # read metadata for previous block
         prevmeta = BlkMeta()
         if top_height >= 0:
-            ser_prevhash = serialize.uint256VectorSerializer.serialize(block.hashPrevBlock)
+            ser_prevhash = serialize.uint256VectorSerializer.serialize(
+                block.hashPrevBlock)
             prevmeta.deserialize(self.db.Get('blkmeta:' + ser_prevhash))
         else:
             ser_prevhash = ''

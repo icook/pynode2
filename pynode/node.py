@@ -28,6 +28,7 @@ import bitcoin.net as net
 
 from .mem_pool import MemPool
 from .chain_db import ChainDb
+from .networks import networks
 
 MY_SUBVERSION = "/pynode:0.0.1/"
 
