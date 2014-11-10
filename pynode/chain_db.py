@@ -13,7 +13,6 @@ import os
 import time
 import logging
 from decimal import Decimal
-from Cache import Cache
 from bitcoin.serialize import *
 from bitcoin.core import *
 from bitcoin.messages import msg_block, message_to_str, message_read
@@ -31,6 +30,31 @@ def block_value(height, fees):
     subsidy = 50 * COIN
     subsidy >>= (height / 210000)
     return subsidy + fees
+
+
+class Cache(object):
+    def __init__(self, max=1000):
+        self.d = {}
+        self.l = []
+        self.max = max
+
+    def put(self, k, v):
+        self.d[k] = v
+        self.l.append(k)
+
+        while (len(self.l) > self.max):
+            kdel = self.l[0]
+            del self.l[0]
+            del self.d[kdel]
+
+    def get(self, k):
+        try:
+            return self.d[k]
+        except:
+            return None
+
+    def exists(self, k):
+        return k in self.d
 
 
 class TxIdx(object):
@@ -271,7 +295,6 @@ class ChainDb(object):
             return None
         outpts = l[0]
         txmap = l[1]
-        spendlist = {}
 
         # pass 1: if outpoint in db, make sure it is unspent
         for k in outpts.iterkeys():
@@ -298,7 +321,7 @@ class ChainDb(object):
             if k[1] >= len(tx.vout):
                 return None
 
-            # outpts[k] = True	# not strictly necessary
+            # outpts[k] = True  # not strictly necessary
 
         return outpts.keys()
 
@@ -347,14 +370,14 @@ class ChainDb(object):
 
         for txin in tx.vin:
             rc = self.txout_spent(txin.prevout)
-            if rc is None:		# not found: orphan
+            if rc is None:      # not found: orphan
                 try:
                     txfrom = self.mempool.pool[txin.prevout.hash]
                 except:
                     return True
                 if txin.prevout.n >= len(txfrom.vout):
                     return None
-            if rc is True:		# spent? strange
+            if rc is True:      # spent? strange
                 return None
 
         return False
