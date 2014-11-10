@@ -1,3 +1,9 @@
+#
+# networks.py - Bitcoin blockchain database
+#
+# Distributed under the MIT/X11 software license, see the accompanying
+# file COPYING or http://www.opensource.org/licenses/mit-license.php.
+#
 from bitcoin.core import x, CBlock
 
 

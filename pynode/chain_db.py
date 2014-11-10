@@ -1,5 +1,5 @@
 #
-# ChainDb.py - Bitcoin blockchain database
+# chain_db.py - Bitcoin blockchain database
 #
 # Distributed under the MIT/X11 software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
