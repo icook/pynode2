@@ -6,7 +6,7 @@
 #
 import logging
 
-from bitcoin.serialize import uint256_to_shortstr
+from bitcoin.core.serialize import uint256_to_shortstr
 
 
 class MemPool(object):

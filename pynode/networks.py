@@ -34,6 +34,18 @@ class BitcoinMainNet(object):
     SUBSIDY_HALVING_INTERVAL = 210000
     PROOF_OF_WORK_LIMIT = 2 ** 256 - 1 >> 32
 
+    # Not part of bitcoinlib
+    CHECKPOINTS = {
+        0: 0x000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26fL,
+        11111: 0x0000000069e244f73d78e8fd29ba2fd2ed618bd6fa2ee92559f542fdb26e7c1dL,
+        33333: 0x000000002dd5588a74784eaa7ab0507a18ad16a236e7b1ce69f00d7ddfb5d0a6L,
+        74000: 0x0000000000573993a3c9e41ce34471c079dcf5f52a0e824a81e7f953b8661a20L,
+        105000: 0x00000000000291ce28027faea320c8d2b054b2e0fe44a773f3eefb151d6bdc97L,
+        134444: 0x00000000000005b12ffd4cd315cd34ffd4a594f430ac814c91184a0d42d2b0feL,
+        168000: 0x000000000000099e61ea72015e79632f216fe6cb33d7899acb35b75c8303b763L,
+        193000: 0x000000000000059f452a5f7340de6682a977387c17010ff6e6c3bd83ca8b1317L,
+    }
+
 
 class BitcoinTestNet(BitcoinMainNet):
     # Mimick bitcoinlib "core_params" global
@@ -50,6 +62,11 @@ class BitcoinTestNet(BitcoinMainNet):
     BASE58_PREFIXES = {'PUBKEY_ADDR': 111,
                        'SCRIPT_ADDR': 196,
                        'SECRET_KEY': 239}
+
+    # Not part of bitcoinlib
+    CHECKPOINTS = {
+        0: 0x000000000933ea01ad0ee984209779baaec3ced90fa3f408719526f8d77f4943L,
+    }
 
 
 class BitcoinRegTest(BitcoinMainNet):
@@ -68,6 +85,7 @@ class BitcoinRegTest(BitcoinMainNet):
     BASE58_PREFIXES = {'PUBKEY_ADDR': 111,
                        'SCRIPT_ADDR': 196,
                        'SECRET_KEY': 239}
+    CHECKPOINTS = {}
 
 
 networks = {'bitcoin_regtest': BitcoinRegTest,

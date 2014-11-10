@@ -13,12 +13,12 @@ import io
 import os
 import time
 import logging
-import bitcoin.serialize as serialize
+import bitcoin.core.serialize as serialize
 import bitcoin.core as core
 
 from decimal import Decimal
 from bitcoin.messages import msg_block
-from bitcoin.scripteval import VerifySignature
+from bitcoin.core.scripteval import VerifySignature
 
 
 def tx_blk_cmp(a, b):
@@ -138,14 +138,14 @@ class ChainDb(object):
             self.log.info("INITIALIZING EMPTY BLOCKCHAIN DATABASE")
             batch = leveldb.WriteBatch()
             batch.Put('misc:height', str(-1))
-            batch.Put('misc:msg_start', self.netmagic.msg_start)
+            batch.Put('misc:msg_start', self.params.MESSAGE_START)
             batch.Put('misc:tophash', hex(0L))
             batch.Put('misc:total_work', hex(0L))
             self.db.Write(batch)
 
         try:
             start = self.db.Get('misc:msg_start')
-            if start != self.netmagic.msg_start:
+            if start != self.params.MESSAGE_START:
                 raise KeyError
         except KeyError:
             self.log.info(
@@ -211,7 +211,7 @@ class ChainDb(object):
             return False
 
     def have_prevblock(self, block):
-        if self.getheight() < 0 and block.sha256 == self.netmagic.block0:
+        if self.getheight() < 0 and block.GetHash() == self.params.GENESIS_BLOCK.GetHash():
             return True
         if self.haveblock(block.hashPrevBlock, False):
             return True
@@ -386,7 +386,7 @@ class ChainDb(object):
     def connect_block(self, ser_hash, block, blkmeta):
         # verify against checkpoint list
         try:
-            chk_hash = self.netmagic.checkpoints[blkmeta.height]
+            chk_hash = self.params.CHECKPOINTS[blkmeta.height]
             if chk_hash != block.sha256:
                 self.log.info("Block %064x does not match checkpoint hash %064x, height %d" % (
                     block.sha256, chk_hash, blkmeta.height))
@@ -403,7 +403,7 @@ class ChainDb(object):
         # verify script signatures
         if ('nosig' not in self.settings and
             ('forcesig' in self.settings or
-             blkmeta.height > self.netmagic.checkpoint_max)):
+             blkmeta.height > max(self.params.CHECKPOINTS.keys()))):
             for tx in block.vtx:
                 tx.calc_sha256()
 
@@ -693,7 +693,7 @@ class ChainDb(object):
                 wanted = 0
 
             buflen = len(buf)
-            startpos = string.find(buf, self.netmagic.msg_start)
+            startpos = string.find(buf, self.params.MESSAGE_START)
             if startpos < 0:
                 wanted = 8
                 continue

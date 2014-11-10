@@ -22,7 +22,7 @@ import logging
 import argparse
 import signal
 
-import bitcoin.serialize as serialize
+import bitcoin.core.serialize as serialize
 import bitcoin.messages as messages
 import bitcoin.net as net
 
@@ -64,7 +64,7 @@ class NodeConn(Greenlet):
             self.handle_close()
 
         # stuff version msg into sendbuf
-        vt = serialize.msg_version()
+        vt = messages.msg_version()
         vt.addrTo.ip = self.dstaddr
         vt.addrTo.port = self.dstport
         vt.addrFrom.ip = "0.0.0.0"
@@ -99,7 +99,7 @@ class NodeConn(Greenlet):
         while True:
             if len(self.recvbuf) < 4:
                 return
-            if self.recvbuf[:4] != self.netmagic.msg_start:
+            if self.recvbuf[:4] != self.params.MESSAGE_START:
                 raise ValueError("got garbage %s" % repr(self.recvbuf))
             # check checksum
             if len(self.recvbuf) < 4 + 12 + 4 + 4:
@@ -148,7 +148,7 @@ class NodeConn(Greenlet):
             gd = messages.msg_getdata(self.ver_send)
             inv = net.CInv()
             inv.type = 2
-            inv.hash = self.netmagic.block0
+            inv.hash = self.params.GENESIS_BLOCK.GetHash()
             gd.inv.append(inv)
             self.send_message(gd)
         elif our_height < self.remote_height:
@@ -356,11 +356,13 @@ class NodeConn(Greenlet):
 
 class PeerManager(object):
 
-    def __init__(self, mempool, chaindb, netmagic):
+    def __init__(self, manager):
         self.log = logging.getLogger(self.__class__.__name__)
-        self.mempool = mempool
-        self.chaindb = chaindb
-        self.netmagic = netmagic
+        self.mempool = manager.mempool
+        self.chaindb = manager.chaindb
+        self.params = manager.params
+        self.manager = manager
+
         self.peers = []
         self.addrs = {}
         self.tried = {}
@@ -368,8 +370,7 @@ class PeerManager(object):
     def add(self, host, port):
         self.log.info("PeerManager: connecting to %s:%d" % (host, port))
         self.tried[host] = True
-        c = NodeConn(host, port, self.log, self, self.mempool,
-                     self.chaindb, self.netmagic)
+        c = NodeConn(host, port, self.manager)
         self.peers.append(c)
         return c
 
@@ -407,7 +408,8 @@ class Manager(object):
                     port=8333,
                     rpcport=9332,
                     db="/tmp/chaindb",
-                    chain="mainnet")
+                    datadir="/tmp/pynode_datadir",
+                    chain="bitcoin_mainnet")
 
     def __init__(self, settings):
         self.settings = self.defaults.copy()
@@ -422,7 +424,16 @@ class Manager(object):
         self.settings['rpcport'] = int(self.settings['rpcport'])
 
         self.log = logging.getLogger("startup")
+        root = logging.getLogger()
+        root.setLevel(logging.INFO)
+
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(logging.DEBUG)
+        formatter = logging.Formatter('%(asctime)s [%(name)s] %(levelname)s: %(message)s')
+        ch.setFormatter(formatter)
+        root.addHandler(ch)
         self.log.info("=" * 100)
+        self.log.info("PyNode starting up....")
 
         self.params = networks[self.settings['chain']]
 
@@ -430,15 +441,21 @@ class Manager(object):
         self.chaindb = ChainDb(self)
         self.peermgr = PeerManager(self)
 
-        # connect to specified remote node
-        #c = peermgr.add(settings['host'], settings['port'])
-        # threads.append(c)
+        # connect to all seed nodes
+        for name, dns in self.params.DNS_SEEDS:
+            hostname, aliaslist, ipaddrlist = socket.gethostbyname_ex(dns)
+            for ip in ipaddrlist:
+                self.log.info("Got {} from DNS seed {}".format(ip, dns))
+                c = self.peermgr.add(ip, self.params.DEFAULT_PORT)
+                c.start()
 
         gevent.signal(signal.SIGHUP, exit, "SIGHUP")
         gevent.signal(signal.SIGINT, exit, "SIGINT")
         gevent.signal(signal.SIGTERM, exit, "SIGTERM")
 
         gevent.wait()
+        self.log.info("PyNode EXIT")
+        self.log.info("=" * 100)
 
     def exit(self, signal=None):
         """ Handle an exit request """
