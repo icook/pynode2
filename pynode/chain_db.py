@@ -190,8 +190,7 @@ class ChainDb(object):
 
         block = self.getblock(txidx.blkhash)
         for tx in block.vtx:
-            tx.calc_sha256()
-            if tx.sha256 == txhash:
+            if tx.GetHash() == txhash:
                 return tx
 
         self.log.info("ERROR: Missing TX %064x in block %064x" %
@@ -266,7 +265,7 @@ class ChainDb(object):
         for tx in block.vtx:
             if tx.is_coinbase:
                 continue
-            txmap[tx.sha256] = tx
+            txmap[tx.GetHash()] = tx
             for txin in tx.vin:
                 v = (txin.prevout.hash, txin.prevout.n)
                 if v in outpts:
@@ -327,8 +326,6 @@ class ChainDb(object):
         return outpts.keys()
 
     def tx_signed(self, tx, block, check_mempool):
-        tx.calc_sha256()
-
         for i in xrange(len(tx.vin)):
             txin = tx.vin[i]
 
@@ -338,8 +335,7 @@ class ChainDb(object):
             # search block for dependent TX
             if txfrom is None and block is not None:
                 for blktx in block.vtx:
-                    blktx.calc_sha256()
-                    if blktx.sha256 == txin.prevout.hash:
+                    if blktx.GetHash() == txin.prevout.hash:
                         txfrom = blktx
                         break
 
@@ -349,18 +345,18 @@ class ChainDb(object):
                     txfrom = self.mempool.pool[txin.prevout.hash]
                 except:
                     self.log.info("TX %064x/%d no-dep %064x" %
-                                  (tx.sha256, i,
+                                  (tx.GetHash(), i,
                                    txin.prevout.hash))
                     return False
             if txfrom is None:
                 self.log.info("TX %064x/%d no-dep %064x" %
-                              (tx.sha256, i,
+                              (tx.GetHash(), i,
                                txin.prevout.hash))
                 return False
 
             if not VerifySignature(txfrom, tx, i, 0):
                 self.log.info("TX %064x/%d sigfail" %
-                              (tx.sha256, i))
+                              (tx.GetHash(), i))
                 return False
 
         return True
@@ -387,9 +383,9 @@ class ChainDb(object):
         # verify against checkpoint list
         try:
             chk_hash = self.params.CHECKPOINTS[blkmeta.height]
-            if chk_hash != block.sha256:
+            if chk_hash != block.GetHash():
                 self.log.info("Block %064x does not match checkpoint hash %064x, height %d" % (
-                    block.sha256, chk_hash, blkmeta.height))
+                    block.GetHash(), chk_hash, blkmeta.height))
                 return False
         except KeyError:
             pass
@@ -397,7 +393,7 @@ class ChainDb(object):
         # check TX connectivity
         outpts = self.spent_outpts(block)
         if outpts is None:
-            self.log.info("Unconnectable block %064x" % (block.sha256, ))
+            self.log.info("Unconnectable block %064x" % (block.GetHash(), ))
             return False
 
         # verify script signatures
@@ -405,14 +401,12 @@ class ChainDb(object):
             ('forcesig' in self.settings or
              blkmeta.height > max(self.params.CHECKPOINTS.keys()))):
             for tx in block.vtx:
-                tx.calc_sha256()
-
                 if tx.is_coinbase():
                     continue
 
                 if not self.tx_signed(tx, block, False):
                     self.log.info(
-                        "Invalid signature in block %064x" % (block.sha256, ))
+                        "Invalid signature in block %064x" % (block.GetHash(), ))
                     return False
 
         # update database pointers for best chain
@@ -422,17 +416,17 @@ class ChainDb(object):
         batch.Put('misc:tophash', ser_hash)
 
         self.log.info("ChainDb: height %d, block %064x" % (
-            blkmeta.height, block.sha256))
+            blkmeta.height, block.GetHash()))
 
         # all TX's in block are connectable; index
         neverseen = 0
         for tx in block.vtx:
-            if not self.mempool.remove(tx.sha256):
+            if not self.mempool.remove(tx.GetHash()):
                 neverseen += 1
 
-            txidx = TxIdx(block.sha256)
-            if not self.puttxidx(tx.sha256, txidx, batch):
-                self.log.info("TxIndex failed %064x" % (tx.sha256,))
+            txidx = TxIdx(block.GetHash())
+            if not self.puttxidx(tx.GetHash(), txidx, batch):
+                self.log.info("TxIndex failed %064x" % (tx.GetHash(),))
                 return False
 
         self.log.info("MemPool: blk.vtx.sz %d, neverseen %d, poolsz %d" % (
@@ -464,8 +458,7 @@ class ChainDb(object):
 
         # update tx index and memory pool
         for tx in block.vtx:
-            tx.calc_sha256()
-            ser_hash = serialize.uint256VectorSerializer.serialize(tx.sha256)
+            ser_hash = serialize.uint256VectorSerializer.serialize(tx.GetHash())
             try:
                 batch.Delete('tx:' + ser_hash)
             except KeyError:
@@ -515,7 +508,6 @@ class ChainDb(object):
             while (self.getblockheight(longer) >
                    self.getblockheight(fork)):
                 block = self.getblock(longer)
-                block.calc_sha256()
                 conn.append(block)
 
                 longer = block.hashPrevBlock
@@ -526,7 +518,6 @@ class ChainDb(object):
                 break
 
             block = self.getblock(fork)
-            block.calc_sha256()
             disconn.append(block)
 
             fork = block.hashPrevBlock
@@ -547,8 +538,8 @@ class ChainDb(object):
 
         for block in conn:
             if not self.connect_block(
-                    serialize.uint256VectorSerializer.serialize(block.sha256),
-                    block, self.getblockmeta(block.sha256)):
+                    serialize.uint256VectorSerializer.serialize(block.GetHash()),
+                    block, self.getblockmeta(block.GetHash())):
                 return False
 
         self.log.info("REORGANIZE DONE")
@@ -561,20 +552,18 @@ class ChainDb(object):
             return self.connect_block(ser_hash, block, blkmeta)
 
         # switching from current chain to another, stronger chain
-        return self.reorganize(block.sha256)
+        return self.reorganize(block.GetHash())
 
     def putoneblock(self, block):
-        block.calc_sha256()
-
         if not block.is_valid():
-            self.log.info("Invalid block %064x" % (block.sha256, ))
+            self.log.info("Invalid block %064x" % (block.GetHash(), ))
             return False
 
         if not self.have_prevblock(block):
-            self.orphans[block.sha256] = True
+            self.orphans[block.GetHash()] = True
             self.orphan_deps[block.hashPrevBlock] = block
             self.log.info("Orphan block %064x (%d orphans)" %
-                          (block.sha256, len(self.orphan_deps)))
+                          (block.GetHash(), len(self.orphan_deps)))
             return False
 
         top_height = self.getheight()
@@ -602,7 +591,7 @@ class ChainDb(object):
         self.blk_write.flush()
 
         # add index entry
-        ser_hash = serialize.uint256VectorSerializer.serialize(block.sha256)
+        ser_hash = serialize.uint256VectorSerializer.serialize(block.GetHash())
         batch.Put('blocks:' + ser_hash, str(fpos))
 
         # store metadata related to this block
@@ -619,7 +608,7 @@ class ChainDb(object):
             heightidx.deserialize(self.db.Get('height:' + heightstr))
         except KeyError:
             pass
-        heightidx.blocks.append(block.sha256)
+        heightidx.blocks.append(block.GetHash())
 
         batch.Put('height:' + heightstr, heightidx.serialize())
         self.db.Write(batch)
@@ -627,7 +616,7 @@ class ChainDb(object):
         # if chain is not best chain, proceed no further
         if (blkmeta.work <= top_work):
             self.log.info(
-                "ChainDb: height %d (weak), block %064x" % (blkmeta.height, block.sha256))
+                "ChainDb: height %d (weak), block %064x" % (blkmeta.height, block.GetHash()))
             return True
 
         # update global chain pointers
@@ -638,25 +627,24 @@ class ChainDb(object):
         return True
 
     def putblock(self, block):
-        block.calc_sha256()
-        if self.haveblock(block.sha256, True):
+        if self.haveblock(block.GetHash(), True):
             self.log.info("Duplicate block %064x submitted" %
-                          (block.sha256, ))
+                          (block.GetHash(), ))
             return False
 
         if not self.putoneblock(block):
             return False
 
-        blkhash = block.sha256
+        blkhash = block.GetHash()
         while blkhash in self.orphan_deps:
             block = self.orphan_deps[blkhash]
             if not self.putoneblock(block):
                 return True
 
             del self.orphan_deps[blkhash]
-            del self.orphans[block.sha256]
+            del self.orphans[block.GetHash()]
 
-            blkhash = block.sha256
+            blkhash = block.GetHash()
 
         return True
 
