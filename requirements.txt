@@ -1,0 +1,6 @@
+argparse==1.2.1
+gevent==1.0.1
+greenlet==0.4.5
+leveldb==0.193
+python-bitcoinlib==0.2.1
+wsgiref==0.1.2
