@@ -19,12 +19,14 @@ import cStringIO
 import copy
 import hashlib
 import logging
+import argparse
 
 from bitcoin.core import *
 from bitcoin.serialize import *
 from bitcoin.messages import *
 
 from .mem_pool import MemPool
+from .chain_db import ChainDb
 
 MY_SUBVERSION = "/pynode:0.0.1/"
 
@@ -427,7 +429,7 @@ class Manager(object):
         self.params = NETWORKS[chain]
 
         self.mempool = MemPool()
-        self.chaindb = ChainDb(self, False, False)
+        self.chaindb = ChainDb(self)
         self.peermgr = PeerManager(self)
 
         # connect to specified remote node
