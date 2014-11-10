@@ -5,6 +5,7 @@
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #
 
+import struct
 import string
 import cStringIO
 import leveldb
@@ -12,11 +13,11 @@ import io
 import os
 import time
 import logging
+import bitcoin.serialize as serialize
+import bitcoin.core as core
+
 from decimal import Decimal
-from bitcoin.serialize import *
-from bitcoin.core import *
-from bitcoin.messages import msg_block, message_to_str, message_read
-from bitcoin.coredefs import COIN
+from bitcoin.messages import msg_block
 from bitcoin.scripteval import VerifySignature
 
 
@@ -27,7 +28,7 @@ def tx_blk_cmp(a, b):
 
 
 def block_value(height, fees):
-    subsidy = 50 * COIN
+    subsidy = 50 * core.COIN
     subsidy >>= (height / 210000)
     return subsidy + fees
 
@@ -125,11 +126,10 @@ class ChainDb(object):
         #    height:*  list of blocks at height h
         #    blkmeta:* block metadata
         #    blocks:*  block seek point in stream
-        self.blk_write = io.BufferedWriter(
-            io.FileIO(datadir + '/blocks.dat', 'ab'))
-        self.blk_read = io.BufferedReader(
-            io.FileIO(datadir + '/blocks.dat', 'rb'))
-        self.db = leveldb.LevelDB(datadir + '/leveldb')
+        dat = self.settings['datadir'] + '/blocks.dat'
+        self.blk_write = io.BufferedWriter(io.FileIO(dat, 'ab'))
+        self.blk_read = io.BufferedReader(io.FileIO(dat, 'rb'))
+        self.db = leveldb.LevelDB(self.settings['datadir'] + '/leveldb')
 
         try:
             self.db.Get('misc:height')
@@ -138,7 +138,7 @@ class ChainDb(object):
             batch = leveldb.WriteBatch()
             batch.Put('misc:height', str(-1))
             batch.Put('misc:msg_start', self.netmagic.msg_start)
-            batch.Put('misc:tophash', ser_uint256(0L))
+            batch.Put('misc:tophash', hex(0L))
             batch.Put('misc:total_work', hex(0L))
             self.db.Write(batch)
 
@@ -152,7 +152,7 @@ class ChainDb(object):
             raise RuntimeError
 
     def puttxidx(self, txhash, txidx, batch=None):
-        ser_txhash = ser_uint256(txhash)
+        ser_txhash = serialize.uint256VectorSerializer.serialize(txhash)
 
         try:
             self.db.Get('tx:' + ser_txhash)
@@ -168,7 +168,7 @@ class ChainDb(object):
         return True
 
     def gettxidx(self, txhash):
-        ser_txhash = ser_uint256(txhash)
+        ser_txhash = serialize.uint256VectorSerializer.serialize(txhash)
         try:
             ser_value = self.db.Get('tx:' + ser_txhash)
         except KeyError:
@@ -202,7 +202,7 @@ class ChainDb(object):
             return True
         if checkorphans and blkhash in self.orphans:
             return True
-        ser_hash = ser_uint256(blkhash)
+        ser_hash = serialize.uint256VectorSerializer.serialize(blkhash)
         try:
             self.db.Get('blocks:' + ser_hash)
             return True
@@ -221,14 +221,14 @@ class ChainDb(object):
         if block is not None:
             return block
 
-        ser_hash = ser_uint256(blkhash)
+        ser_hash = serialize.uint256VectorSerializer.serialize(blkhash)
         try:
             # Lookup the block index, seek in the file
             fpos = long(self.db.Get('blocks:' + ser_hash))
             self.blk_read.seek(fpos)
 
             # read and decode "block" msg
-            msg = message_read(self.netmagic, self.blk_read)
+            msg = msg_block.msg_deser(self.blk_read, params=self.params)
             if msg is None:
                 return None
             block = msg.block
@@ -268,7 +268,7 @@ class ChainDb(object):
             txmap[tx.sha256] = tx
             for txin in tx.vin:
                 v = (txin.prevout.hash, txin.prevout.n)
-                if v in outs:
+                if v in outpts:
                     return None
 
                 outpts[v] = False
@@ -298,7 +298,7 @@ class ChainDb(object):
 
         # pass 1: if outpoint in db, make sure it is unspent
         for k in outpts.iterkeys():
-            outpt = COutPoint()
+            outpt = core.COutPoint()
             outpt.hash = k[0]
             outpt.n = k[1]
             rc = self.txout_spent(outpt)
@@ -445,7 +445,7 @@ class ChainDb(object):
         return True
 
     def disconnect_block(self, block):
-        ser_prevhash = ser_uint256(block.hashPrevBlock)
+        ser_prevhash = serialize.uint256VectorSerializer.serialize(block.hashPrevBlock)
         prevmeta = BlkMeta()
         prevmeta.deserialize(self.db.Get('blkmeta:' + ser_prevhash))
 
@@ -463,7 +463,7 @@ class ChainDb(object):
         # update tx index and memory pool
         for tx in block.vtx:
             tx.calc_sha256()
-            ser_hash = ser_uint256(tx.sha256)
+            ser_hash = serialize.uint256VectorSerializer.serialize(tx.sha256)
             try:
                 batch.Delete('tx:' + ser_hash)
             except KeyError:
@@ -484,7 +484,7 @@ class ChainDb(object):
         return True
 
     def getblockmeta(self, blkhash):
-        ser_hash = ser_uint256(blkhash)
+        ser_hash = serialize.uint256VectorSerializer.serialize(blkhash)
         try:
             meta = BlkMeta()
             meta.deserialize(self.db.Get('blkmeta:' + ser_hash))
@@ -544,8 +544,9 @@ class ChainDb(object):
                 return False
 
         for block in conn:
-            if not self.connect_block(ser_uint256(block.sha256),
-                                      block, self.getblockmeta(block.sha256)):
+            if not self.connect_block(
+                    serialize.uint256VectorSerializer.serialize(block.sha256),
+                    block, self.getblockmeta(block.sha256)):
                 return False
 
         self.log.info("REORGANIZE DONE")
@@ -580,7 +581,7 @@ class ChainDb(object):
         # read metadata for previous block
         prevmeta = BlkMeta()
         if top_height >= 0:
-            ser_prevhash = ser_uint256(block.hashPrevBlock)
+            ser_prevhash = serialize.uint256VectorSerializer.serialize(block.hashPrevBlock)
             prevmeta.deserialize(self.db.Get('blkmeta:' + ser_prevhash))
         else:
             ser_prevhash = ''
@@ -590,7 +591,7 @@ class ChainDb(object):
         # build network "block" msg, as canonical disk storage form
         msg = msg_block()
         msg.block = block
-        msg_data = message_to_str(self.netmagic, msg)
+        msg_data = msg.to_bytes(params=self.params)
 
         # write "block" msg to storage
         fpos = self.blk_write.tell()
@@ -598,14 +599,14 @@ class ChainDb(object):
         self.blk_write.flush()
 
         # add index entry
-        ser_hash = ser_uint256(block.sha256)
+        ser_hash = serialize.uint256VectorSerializer.serialize(block.sha256)
         batch.Put('blocks:' + ser_hash, str(fpos))
 
         # store metadata related to this block
         blkmeta = BlkMeta()
         blkmeta.height = prevmeta.height + 1
         blkmeta.work = (prevmeta.work +
-                        uint256_from_compact(block.nBits))
+                        serialize.uint256_from_compact(block.nBits))
         batch.Put('blkmeta:' + ser_hash, blkmeta.serialize())
 
         # store list of blocks at this height
@@ -658,7 +659,7 @@ class ChainDb(object):
 
     def locate(self, locator):
         for hash in locator.vHave:
-            ser_hash = ser_uint256(hash)
+            ser_hash = serialize.uint256VectorSerializer.serialize(hash)
             if ser_hash in self.blkmeta:
                 blkmeta = BlkMeta()
                 blkmeta.deserialize(self.db.Get('blkmeta:' + ser_hash))
@@ -669,7 +670,8 @@ class ChainDb(object):
         return int(self.db.Get('misc:height'))
 
     def gettophash(self):
-        return uint256_from_str(self.db.Get('misc:tophash'))
+        return serialize.uint256VectorSerializer.deserialize(
+            self.db.Get('misc:tophash'))
 
     def loadfile(self, filename):
         fd = os.open(filename, os.O_RDONLY)
@@ -708,7 +710,7 @@ class ChainDb(object):
             buf = buf[blkpos + blksize:]
 
             f = cStringIO.StringIO(ser_blk)
-            block = CBlock()
+            block = core.CBlock()
             block.deserialize(f)
 
             self.putblock(block)
@@ -803,22 +805,22 @@ class ChainDb(object):
         #
         # build coinbase
         #
-        txin = CTxIn()
+        txin = core.CTxIn()
         txin.prevout.set_null()
         # FIXME: txin.scriptSig
 
-        txout = CTxOut()
+        txout = core.CTxOut()
         txout.nValue = block_value(self.getheight(), total_fees)
         # FIXME: txout.scriptPubKey
 
-        coinbase = CTransaction()
+        coinbase = core.CTransaction()
         coinbase.vin.append(txin)
         coinbase.vout.append(txout)
 
         #
         # build block
         #
-        block = CBlock()
+        block = core.CBlock()
         block.hashPrevBlock = tophash
         block.nTime = int(time.time())
         block.nBits = prevblock.nBits  # TODO: wrong

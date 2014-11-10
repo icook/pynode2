@@ -20,10 +20,11 @@ import copy
 import hashlib
 import logging
 import argparse
+import signal
 
-from bitcoin.core import *
-from bitcoin.serialize import *
-from bitcoin.messages import *
+import bitcoin.serialize as serialize
+import bitcoin.messages as messages
+import bitcoin.net as net
 
 from .mem_pool import MemPool
 from .chain_db import ChainDb
@@ -39,7 +40,7 @@ class NodeConn(Greenlet):
         self.peermgr = manager.peermgr
         self.mempool = manager.mempool
         self.chaindb = manager.chaindb
-        self.params = params
+        self.params = manager.params
 
         self.dstaddr = dstaddr
         self.dstport = dstport
@@ -57,12 +58,12 @@ class NodeConn(Greenlet):
     def _run(self):
         self.log.info("Connecting")
         try:
-            self.sock.connect((dstaddr, dstport))
+            self.sock.connect((self.dstaddr, self.dstport))
         except:
             self.handle_close()
 
         # stuff version msg into sendbuf
-        vt = msg_version()
+        vt = serialize.msg_version()
         vt.addrTo.ip = self.dstaddr
         vt.addrTo.port = self.dstport
         vt.addrFrom.ip = "0.0.0.0"
@@ -114,9 +115,9 @@ class NodeConn(Greenlet):
                 raise ValueError("got bad checksum %s" % repr(self.recvbuf))
             self.recvbuf = self.recvbuf[4 + 12 + 4 + 4 + msglen:]
 
-            if command in messagemap:
+            if command in messages.messagemap:
                 f = cStringIO.StringIO(msg)
-                t = messagemap[command](self.ver_recv)
+                t = messages.messagemap[command](self.ver_recv)
                 t.deserialize(f)
                 self.got_message(t)
             else:
@@ -125,7 +126,7 @@ class NodeConn(Greenlet):
     def send_message(self, message):
         self.log.debug("send %s" % repr(message))
 
-        tmsg = message_to_str(self.netmagic, message)
+        tmsg = message.to_bytes(params=self.params)
 
         try:
             self.sock.sendall(tmsg)
@@ -143,14 +144,14 @@ class NodeConn(Greenlet):
 
         our_height = self.chaindb.getheight()
         if our_height < 0:
-            gd = msg_getdata(self.ver_send)
-            inv = CInv()
+            gd = messages.msg_getdata(self.ver_send)
+            inv = net.CInv()
             inv.type = 2
             inv.hash = self.netmagic.block0
             gd.inv.append(inv)
             self.send_message(gd)
         elif our_height < self.remote_height:
-            gb = msg_getblocks(self.ver_send)
+            gb = messages.msg_getblocks(self.ver_send)
             if our_height >= 0:
                 gb.locator.vHave.append(self.chaindb.gettophash())
             self.send_message(gb)
@@ -159,51 +160,47 @@ class NodeConn(Greenlet):
         gevent.sleep()
 
         if self.last_sent + 30 * 60 < time.time():
-            self.send_message(msg_ping(self.ver_send))
+            self.send_message(messages.msg_ping(self.ver_send))
 
         self.log.debug("recv %s" % repr(message))
 
         if message.command == "version":
-            self.ver_send = min(PROTO_VERSION, message.nVersion)
-            if self.ver_send < MIN_PROTO_VERSION:
+            self.ver_send = min(self.params.PROTO_VERSION, message.nVersion)
+            if self.ver_send < self.params.MIN_PROTO_VERSION:
                 self.log.info("Obsolete version %d, closing" %
                               (self.ver_send,))
                 self.handle_close()
                 return
 
-            if (self.ver_send >= NOBLKS_VERSION_START and
-                    self.ver_send <= NOBLKS_VERSION_END):
-                self.getblocks_ok = False
-
             self.remote_height = message.nStartingHeight
-            self.send_message(msg_verack(self.ver_send))
-            if self.ver_send >= CADDR_TIME_VERSION:
-                self.send_message(msg_getaddr(self.ver_send))
+            self.send_message(messages.msg_verack(self.ver_send))
+            if self.ver_send >= self.params.CADDR_TIME_VERSION:
+                self.send_message(messages.msg_getaddr(self.ver_send))
             self.send_getblocks()
 
         elif message.command == "verack":
             self.ver_recv = self.ver_send
 
-            if self.ver_send >= MEMPOOL_GD_VERSION:
-                self.send_message(msg_mempool())
+            if self.ver_send >= self.params.MEMPOOL_GD_VERSION:
+                self.send_message(messages.msg_mempool())
 
         elif message.command == "ping":
-            if self.ver_send > BIP0031_VERSION:
-                self.send_message(msg_pong(self.ver_send))
+            if self.ver_send > self.params.BIP0031_VERSION:
+                self.send_message(messages.msg_pong(self.ver_send))
 
         elif message.command == "addr":
-            peermgr.new_addrs(message.addrs)
+            self.peermgr.new_addrs(message.addrs)
 
         elif message.command == "inv":
 
             # special message sent to kick getblocks
             if (len(message.inv) == 1 and
-                    message.inv[0].type == MSG_BLOCK and
+                    message.inv[0].type == messages.MSG_BLOCK and
                     self.chaindb.haveblock(message.inv[0].hash, True)):
                 self.send_getblocks(False)
                 return
 
-            want = msg_getdata(self.ver_send)
+            want = messages.msg_getdata(self.ver_send)
             for i in message.inv:
                 if i.type == 1:
                     want.inv.append(i)
@@ -236,16 +233,16 @@ class NodeConn(Greenlet):
             self.getheaders(message)
 
         elif message.command == "getaddr":
-            msg = msg_addr()
-            msg.addrs = peermgr.random_addrs()
+            msg = messages.msg_addr()
+            msg.addrs = self.peermgr.random_addrs()
 
             self.send_message(msg)
 
         elif message.command == "mempool":
-            msg = msg_inv()
+            msg = messages.msg_inv()
             for k in self.mempool.pool.iterkeys():
-                inv = CInv()
-                inv.type = MSG_TX
+                inv = net.CInv()
+                inv.type = messages.MSG_TX
                 inv.hash = k
                 msg.inv.append(inv)
 
@@ -268,7 +265,7 @@ class NodeConn(Greenlet):
             if tx is None:
                 return
 
-        msg = msg_tx()
+        msg = messages.msg_tx()
         msg.tx = tx
 
         self.send_message(msg)
@@ -278,7 +275,7 @@ class NodeConn(Greenlet):
         if block is None:
             return
 
-        msg = msg_block()
+        msg = messages.msg_block()
         msg.block = block
 
         self.send_message(msg)
@@ -286,11 +283,11 @@ class NodeConn(Greenlet):
         if blkhash == self.hash_continue:
             self.hash_continue = None
 
-            inv = CInv()
-            inv.type = MSG_BLOCK
+            inv = net.CInv()
+            inv.type = messages.MSG_BLOCK
             inv.hash = self.chaindb.gettophash()
 
-            msg = msg_inv()
+            msg = messages.msg_inv()
             msg.inv.append(inv)
 
             self.send_message(msg)
@@ -300,9 +297,9 @@ class NodeConn(Greenlet):
             self.handle_close()
             return
         for inv in message.inv:
-            if inv.type == MSG_TX:
+            if inv.type == messages.MSG_TX:
                 self.getdata_tx(inv.hash)
-            elif inv.type == MSG_BLOCK:
+            elif inv.type == messages.MSG_BLOCK:
                 self.getdata_block(inv.hash)
 
     def getblocks(self, message):
@@ -313,14 +310,14 @@ class NodeConn(Greenlet):
         if end_height > top_height:
             end_height = top_height
 
-        msg = msg_inv()
+        msg = messages.msg_inv()
         while height <= end_height:
             hash = long(self.chaindb.height[str(height)])
             if hash == message.hashstop:
                 break
 
-            inv = CInv()
-            inv.type = MSG_BLOCK
+            inv = net.CInv()
+            inv.type = messages.MSG_BLOCK
             inv.hash = hash
             msg.inv.append(inv)
 
@@ -339,7 +336,7 @@ class NodeConn(Greenlet):
         if end_height > top_height:
             end_height = top_height
 
-        msg = msg_headers()
+        msg = messages.msg_headers()
         while height <= end_height:
             blkhash = long(self.chaindb.height[str(height)])
             if blkhash == message.hashstop:
@@ -426,7 +423,7 @@ class Manager(object):
         self.log = logging.getLogger("startup")
         self.log.info("=" * 100)
 
-        self.params = NETWORKS[chain]
+        self.params = networks[self.settings['chain']]
 
         self.mempool = MemPool()
         self.chaindb = ChainDb(self)
@@ -465,7 +462,7 @@ def main():
         import pprint
         pprint.pprint(raw_config)
         exit(0)
-    Manager(config)
+    Manager(raw_config)
 
 
 if __name__ == '__main__':
