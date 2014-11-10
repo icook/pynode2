@@ -1,19 +1,19 @@
-
 #
 # MemPool.py
 #
 # Distributed under the MIT/X11 software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 #
+import logging
 
 from bitcoin.serialize import uint256_to_shortstr
 
 
 class MemPool(object):
 
-    def __init__(self, log):
+    def __init__(self):
         self.pool = {}
-        self.log = log
+        self.log = logging.getLogger(self.__class__.__name__)
 
     def add(self, tx):
         tx.calc_sha256()
@@ -21,16 +21,16 @@ class MemPool(object):
         hashstr = uint256_to_shortstr(hash)
 
         if hash in self.pool:
-            self.log.write("MemPool.add(%s): already known" % (hashstr,))
+            self.log.info("MemPool.add(%s): already known" % (hashstr,))
             return False
         if not tx.is_valid():
-            self.log.write("MemPool.add(%s): invalid TX" % (hashstr, ))
+            self.log.info("MemPool.add(%s): invalid TX" % (hashstr, ))
             return False
 
         self.pool[hash] = tx
 
-        self.log.write("MemPool.add(%s), poolsz %d" %
-                       (hashstr, len(self.pool)))
+        self.log.info("MemPool.add(%s), poolsz %d" %
+                      (hashstr, len(self.pool)))
 
         return True
 

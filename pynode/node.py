@@ -1,4 +1,3 @@
-#!/usr/bin/python
 #
 # node.py - Bitcoin P2P network half-a-node
 #
@@ -20,13 +19,13 @@ import cStringIO
 import copy
 import hashlib
 import rpc
+import logging
 
-import ChainDb
-import MemPool
-import Log
 from bitcoin.core import *
 from bitcoin.serialize import *
 from bitcoin.messages import *
+
+from .mem_pool import MemPool
 
 MY_SUBVERSION = "/pynode:0.0.1/"
 
@@ -58,10 +57,9 @@ def verbose_recvmsg(message):
 
 class NodeConn(Greenlet):
 
-    def __init__(self, dstaddr, dstport, log, peermgr,
-                 mempool, chaindb, netmagic):
+    def __init__(self, dstaddr, dstport, peermgr, mempool, chaindb, netmagic):
         Greenlet.__init__(self)
-        self.log = log
+        self.log = logging.getLogger(self.__class__.__name__)
         self.peermgr = peermgr
         self.mempool = mempool
         self.chaindb = chaindb
@@ -80,7 +78,7 @@ class NodeConn(Greenlet):
 
         self.hash_continue = None
 
-        self.log.write("connecting")
+        self.log.info("Connecting")
         try:
             self.sock.connect((dstaddr, dstport))
         except:
@@ -97,7 +95,7 @@ class NodeConn(Greenlet):
         self.send_message(vt)
 
     def _run(self):
-        self.log.write(self.dstaddr + " connected")
+        self.log.info(self.dstaddr + " connected")
         while True:
             try:
                 t = self.sock.recv(8192)
@@ -110,7 +108,7 @@ class NodeConn(Greenlet):
             self.got_data()
 
     def handle_close(self):
-        self.log.write(self.dstaddr + " close")
+        self.log.info(self.dstaddr + " close")
         self.recvbuf = ""
         try:
             self.sock.shutdown(socket.SHUT_RDWR)
@@ -145,11 +143,11 @@ class NodeConn(Greenlet):
                 t.deserialize(f)
                 self.got_message(t)
             else:
-                self.log.write("UNKNOWN COMMAND %s %s" % (command, repr(msg)))
+                self.log.warn("UNKNOWN COMMAND %s %s" % (command, repr(msg)))
 
     def send_message(self, message):
         if verbose_sendmsg(message):
-            self.log.write("send %s" % repr(message))
+            self.log.info("send %s" % repr(message))
 
         tmsg = message_to_str(self.netmagic, message)
 
@@ -188,13 +186,13 @@ class NodeConn(Greenlet):
             self.send_message(msg_ping(self.ver_send))
 
         if verbose_recvmsg(message):
-            self.log.write("recv %s" % repr(message))
+            self.log.info("recv %s" % repr(message))
 
         if message.command == "version":
             self.ver_send = min(PROTO_VERSION, message.nVersion)
             if self.ver_send < MIN_PROTO_VERSION:
-                self.log.write("Obsolete version %d, closing" %
-                               (self.ver_send,))
+                self.log.info("Obsolete version %d, closing" %
+                              (self.ver_send,))
                 self.handle_close()
                 return
 
@@ -241,10 +239,10 @@ class NodeConn(Greenlet):
 
         elif message.command == "tx":
             if self.chaindb.tx_is_orphan(message.tx):
-                self.log.write(
+                self.log.info(
                     "MemPool: Ignoring orphan TX %064x" % (message.tx.sha256,))
             elif not self.chaindb.tx_signed(message.tx, None, True):
-                self.log.write(
+                self.log.info(
                     "MemPool: Ignoring failed-sig TX %064x" % (message.tx.sha256,))
             else:
                 self.mempool.add(message.tx)
@@ -385,8 +383,8 @@ class NodeConn(Greenlet):
 
 class PeerManager(object):
 
-    def __init__(self, log, mempool, chaindb, netmagic):
-        self.log = log
+    def __init__(self, mempool, chaindb, netmagic):
+        self.log = logging.getLogger(self.__class__.__name__)
         self.mempool = mempool
         self.chaindb = chaindb
         self.netmagic = netmagic
@@ -395,8 +393,7 @@ class PeerManager(object):
         self.tried = {}
 
     def add(self, host, port):
-        self.log.write("PeerManager: connecting to %s:%d" %
-                       (host, port))
+        self.log.info("PeerManager: connecting to %s:%d" % (host, port))
         self.tried[host] = True
         c = NodeConn(host, port, self.log, self, self.mempool,
                      self.chaindb, self.netmagic)
@@ -409,9 +406,8 @@ class PeerManager(object):
                 continue
             self.addrs[addr.ip] = addr
 
-        self.log.write("PeerManager: Received %d new addresses (%d addrs, %d tried)" %
-                       (len(addrs), len(self.addrs),
-                        len(self.tried)))
+        self.log.info("PeerManager: Received %d new addresses (%d addrs, %d tried)" %
+                      (len(addrs), len(self.addrs), len(self.tried)))
 
     def random_addrs(self):
         ips = self.addrs.keys()
@@ -466,12 +462,11 @@ if __name__ == '__main__':
     settings['port'] = int(settings['port'])
     settings['rpcport'] = int(settings['rpcport'])
 
-    log = Log.Log(settings['log'])
-
-    log.write("\n\n\n\n")
+    log = logging.getLogger("startup")
+    log.info("=" * 100)
 
     if chain not in NETWORKS:
-        log.write("invalid network")
+        log.info("invalid network")
         sys.exit(1)
 
     netmagic = NETWORKS[chain]
@@ -509,9 +504,9 @@ if __name__ == '__main__':
             for t in threads:
                 t.kill()
             gevent.joinall(threads)
-            log.write('Flushing database...')
+            log.info('Flushing database...')
             del chaindb.db
             chaindb.blk_write.close()
-            log.write('OK')
+            log.info('OK')
 
     start()
