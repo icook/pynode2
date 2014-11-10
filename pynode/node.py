@@ -449,7 +449,7 @@ class Manager(object):
         gevent.kill(gevent.hub.get_hub().parent)
 
 
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser(description='Run powerpool!')
     parser.add_argument('config', type=argparse.FileType('r'),
                         help='yaml configuration file to run with')
@@ -466,3 +466,7 @@ if __name__ == '__main__':
         pprint.pprint(raw_config)
         exit(0)
     Manager(config)
+
+
+if __name__ == '__main__':
+    main()
