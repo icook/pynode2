@@ -33,28 +33,6 @@ settings = {}
 debugnet = False
 
 
-def verbose_sendmsg(message):
-    if debugnet:
-        return True
-    if message.command != 'getdata':
-        return True
-    return False
-
-
-def verbose_recvmsg(message):
-    skipmsg = {
-        'tx',
-        'block',
-        'inv',
-        'addr',
-    }
-    if debugnet:
-        return True
-    if message.command in skipmsg:
-        return False
-    return True
-
-
 class NodeConn(Greenlet):
 
     def __init__(self, dstaddr, dstport, peermgr, mempool, chaindb, netmagic):
@@ -146,8 +124,7 @@ class NodeConn(Greenlet):
                 self.log.warn("UNKNOWN COMMAND %s %s" % (command, repr(msg)))
 
     def send_message(self, message):
-        if verbose_sendmsg(message):
-            self.log.info("send %s" % repr(message))
+        self.log.debug("send %s" % repr(message))
 
         tmsg = message_to_str(self.netmagic, message)
 
@@ -185,8 +162,7 @@ class NodeConn(Greenlet):
         if self.last_sent + 30 * 60 < time.time():
             self.send_message(msg_ping(self.ver_send))
 
-        if verbose_recvmsg(message):
-            self.log.info("recv %s" % repr(message))
+        self.log.debug("recv %s" % repr(message))
 
         if message.command == "version":
             self.ver_send = min(PROTO_VERSION, message.nVersion)
