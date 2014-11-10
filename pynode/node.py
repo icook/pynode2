@@ -9,16 +9,15 @@ import gevent
 import gevent.pywsgi
 from gevent import Greenlet
 
+import toml
 import struct
 import socket
 import time
 import sys
-import re
 import random
 import cStringIO
 import copy
 import hashlib
-import rpc
 import logging
 
 from bitcoin.core import *
@@ -29,33 +28,31 @@ from .mem_pool import MemPool
 
 MY_SUBVERSION = "/pynode:0.0.1/"
 
-settings = {}
-debugnet = False
-
 
 class NodeConn(Greenlet):
 
-    def __init__(self, dstaddr, dstport, peermgr, mempool, chaindb, netmagic):
+    def __init__(self, dstaddr, dstport, manager):
         Greenlet.__init__(self)
         self.log = logging.getLogger(self.__class__.__name__)
-        self.peermgr = peermgr
-        self.mempool = mempool
-        self.chaindb = chaindb
-        self.netmagic = netmagic
+        self.peermgr = manager.peermgr
+        self.mempool = manager.mempool
+        self.chaindb = manager.chaindb
+        self.params = params
+
         self.dstaddr = dstaddr
         self.dstport = dstport
         self.sock = gevent.socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.recvbuf = ""
-        self.ver_send = MIN_PROTO_VERSION
-        self.ver_recv = MIN_PROTO_VERSION
+        self.ver_send = None
+        self.ver_recv = None
         self.last_sent = 0
         self.getblocks_ok = True
         self.last_block_rx = time.time()
         self.last_getblocks = 0
         self.remote_height = -1
-
         self.hash_continue = None
 
+    def _run(self):
         self.log.info("Connecting")
         try:
             self.sock.connect((dstaddr, dstport))
@@ -72,7 +69,6 @@ class NodeConn(Greenlet):
         vt.strSubVer = MY_SUBVERSION
         self.send_message(vt)
 
-    def _run(self):
         self.log.info(self.dstaddr + " connected")
         while True:
             try:
@@ -80,6 +76,7 @@ class NodeConn(Greenlet):
                 if len(t) <= 0:
                     raise ValueError
             except (IOError, ValueError):
+                self.log.info(self.dstaddr + " disconnected")
                 self.handle_close()
                 return
             self.recvbuf += t
@@ -403,86 +400,67 @@ class PeerManager(object):
         self.peers = []
 
 
+class Manager(object):
+    defaults = dict(host="127.0.0.1",
+                    rpcpass=None,
+                    rpcuser=None,
+                    port=8333,
+                    rpcport=9332,
+                    db="/tmp/chaindb",
+                    chain="mainnet")
+
+    def __init__(self, settings):
+        self.settings = self.defaults.copy()
+        self.settings.update(settings)
+
+        if not self.settings['rpcuser'] or not self.settings['rpcpass']:
+            self.log.error(
+                "You must set the following in config: rpcuser, rpcpass")
+            sys.exit(1)
+
+        self.settings['port'] = int(self.settings['port'])
+        self.settings['rpcport'] = int(self.settings['rpcport'])
+
+        self.log = logging.getLogger("startup")
+        self.log.info("=" * 100)
+
+        self.params = NETWORKS[chain]
+
+        self.mempool = MemPool()
+        self.chaindb = ChainDb(self, False, False)
+        self.peermgr = PeerManager(self)
+
+        # connect to specified remote node
+        #c = peermgr.add(settings['host'], settings['port'])
+        #threads.append(c)
+
+        gevent.signal(signal.SIGHUP, exit, "SIGHUP")
+        gevent.signal(signal.SIGINT, exit, "SIGINT")
+        gevent.signal(signal.SIGTERM, exit, "SIGTERM")
+
+        gevent.wait()
+
+    def exit(self, signal=None):
+        """ Handle an exit request """
+        self.logger.info("{} {}".format(signal, "*" * 80))
+        # Kill the top level greenlet
+        gevent.kill(gevent.hub.get_hub().parent)
+
+
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: node.py CONFIG-FILE")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description='Run powerpool!')
+    parser.add_argument('config', type=argparse.FileType('r'),
+                        help='yaml configuration file to run with')
+    parser.add_argument('-d', '--dump-config', action="store_true",
+                        help='print the result of the YAML configuration file and exit')
+    parser.add_argument('-s', '--server-number', type=int, default=0,
+                        help='increase the configued server_number by this much')
+    args = parser.parse_args()
 
-    f = open(sys.argv[1])
-    for line in f:
-        m = re.search('^(\w+)\s*=\s*(\S.*)$', line)
-        if m is None:
-            continue
-        settings[m.group(1)] = m.group(2)
-    f.close()
-
-    if 'host' not in settings:
-        settings['host'] = '127.0.0.1'
-    if 'port' not in settings:
-        settings['port'] = 8333
-    if 'rpcport' not in settings:
-        settings['rpcport'] = 9332
-    if 'db' not in settings:
-        settings['db'] = '/tmp/chaindb'
-    if 'chain' not in settings:
-        settings['chain'] = 'mainnet'
-    chain = settings['chain']
-    if 'log' not in settings or (settings['log'] == '-'):
-        settings['log'] = None
-
-    if ('rpcuser' not in settings or
-            'rpcpass' not in settings):
-        print("You must set the following in config: rpcuser, rpcpass")
-        sys.exit(1)
-
-    settings['port'] = int(settings['port'])
-    settings['rpcport'] = int(settings['rpcport'])
-
-    log = logging.getLogger("startup")
-    log.info("=" * 100)
-
-    if chain not in NETWORKS:
-        log.info("invalid network")
-        sys.exit(1)
-
-    netmagic = NETWORKS[chain]
-
-    mempool = MemPool.MemPool(log)
-    chaindb = ChainDb.ChainDb(settings, settings['db'], log, mempool,
-                              netmagic, False, False)
-    peermgr = PeerManager(log, mempool, chaindb, netmagic)
-
-    if 'loadblock' in settings:
-        chaindb.loadfile(settings['loadblock'])
-
-    threads = []
-
-    # start HTTP server for JSON-RPC
-    rpcexec = rpc.RPCExec(peermgr, mempool, chaindb, log,
-                          settings['rpcuser'], settings['rpcpass'])
-    rpcserver = gevent.pywsgi.WSGIServer(
-        ('', settings['rpcport']), rpcexec.handle_request)
-    t = gevent.Greenlet(rpcserver.serve_forever)
-    threads.append(t)
-
-    # connect to specified remote node
-    c = peermgr.add(settings['host'], settings['port'])
-    threads.append(c)
-
-    # program main loop
-    def start(timeout=None):
-        for t in threads:
-            t.start()
-        try:
-            gevent.joinall(threads, timeout=timeout,
-                           raise_error=True)
-        finally:
-            for t in threads:
-                t.kill()
-            gevent.joinall(threads)
-            log.info('Flushing database...')
-            del chaindb.db
-            chaindb.blk_write.close()
-            log.info('OK')
-
-    start()
+    # override those defaults with a loaded yaml config
+    raw_config = toml.load(args.config) or {}
+    if args.dump_config:
+        import pprint
+        pprint.pprint(raw_config)
+        exit(0)
+    Manager(config)
