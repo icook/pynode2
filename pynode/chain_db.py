@@ -61,7 +61,7 @@ class Cache(object):
 
 class TxIdx(object):
 
-    def __init__(self, blkhash=0L, spentmask=0L):
+    def __init__(self, blkhash="\0" * 32, spentmask=0L):
         self.blkhash = blkhash
         self.spentmask = spentmask
 
@@ -156,8 +156,8 @@ class ChainDb(object):
         try:
             self.db.Get('tx:' + txhash)
             old_txidx = self.gettxidx(txhash)
-            self.log.info("WARNING: overwriting duplicate TX %064x, height %d, oldblk %064x, oldspent %x, newblk %064x" % (
-                txhash, self.getheight(), old_txidx.blkhash, old_txidx.spentmask, txidx.blkhash))
+            self.log.warn("overwriting duplicate TX {}, height {}, oldblk {}, oldspent {}, newblk {}".format(
+                txhash.encode('hex'), self.getheight(), old_txidx.blkhash.encode('hex'), old_txidx.spentmask, txidx.blkhash.encode('hex')))
         except KeyError:
             pass
         batch = self.db if batch is not None else batch
@@ -175,7 +175,7 @@ class ChainDb(object):
         pos = string.find(ser_value, ' ')
 
         txidx = TxIdx()
-        txidx.blkhash = long(ser_value[:pos], 16)
+        txidx.blkhash = core.x(ser_value[:pos])
         txidx.spentmask = long(ser_value[pos + 1:], 16)
 
         return txidx
@@ -223,7 +223,7 @@ class ChainDb(object):
             self.blk_read.seek(fpos)
 
             # read and decode "block" msg
-            msg = msg_block.msg_deser(self.blk_read, params=self.params)
+            msg = msg_block.msg_deser(self.blk_read)
             if msg is None:
                 return None
             block = msg.block
@@ -344,14 +344,13 @@ class ChainDb(object):
                                    txin.prevout.hash))
                     return False
             if txfrom is None:
-                self.log.info("TX %064x/%d no-dep %064x" %
-                              (tx.GetHash(), i,
-                               txin.prevout.hash))
+                self.log.info("TX {}/{} no-dep {}"
+                              .format(tx.GetHash().encode('hex'), i,
+                                      txin.prevout.hash.encode('hex')))
                 return False
 
-            if not VerifySignature(txfrom, tx, i, 0):
-                self.log.info("TX %064x/%d sigfail" %
-                              (tx.GetHash(), i))
+            if not VerifySignature(txfrom, tx, i):
+                self.log.info("TX {}/{} sigfail".format(tx.GetHash().encode('hex'), i))
                 return False
 
         return True
@@ -403,7 +402,7 @@ class ChainDb(object):
 
                 if not self.tx_signed(tx, block, False):
                     self.log.info(
-                        "Invalid signature in block %064x" % (block.GetHash(), ))
+                        "Invalid signature in block {}".format(block.GetHash().encode('hex')))
                     return False
 
         # update database pointers for best chain
@@ -476,7 +475,7 @@ class ChainDb(object):
     def getblockmeta(self, blkhash):
         try:
             meta = BlkMeta()
-            meta.deserialize(self.db.Get('blkmeta:' + hash))
+            meta.deserialize(self.db.Get('blkmeta:' + blkhash))
         except KeyError:
             return None
 
@@ -559,7 +558,7 @@ class ChainDb(object):
         if not self.have_prevblock(block):
             self.orphans[block.GetHash()] = True
             self.orphan_deps[block.hashPrevBlock] = block
-            self.log.info("Orphan block {} (%d orphans)"
+            self.log.info("Orphan block {} ({} orphans)"
                           .format(block.GetHash().encode('hex'),
                                   len(self.orphan_deps)))
             return False
@@ -577,7 +576,9 @@ class ChainDb(object):
         # build network "block" msg, as canonical disk storage form
         msg = msg_block()
         msg.block = block
-        msg_data = msg.to_bytes(params=self.params)
+        f = cStringIO.StringIO()
+        msg.msg_ser(f)
+        msg_data = f.getvalue()
 
         # write "block" msg to storage
         fpos = self.blk_write.tell()
@@ -653,8 +654,7 @@ class ChainDb(object):
         return int(self.db.Get('misc:height'))
 
     def gettophash(self):
-        return serialize.uint256_from_str(
-            self.db.Get('misc:tophash'))
+        return self.db.Get('misc:tophash')
 
     def loadfile(self, filename):
         fd = os.open(filename, os.O_RDONLY)
