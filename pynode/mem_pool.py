@@ -10,36 +10,36 @@ from bitcoin.serialize import uint256_to_shortstr
 
 
 class MemPool(object):
-	def __init__(self, log):
-		self.pool = {}
-		self.log = log
 
-	def add(self, tx):
-		tx.calc_sha256()
-		hash = tx.sha256
-		hashstr = uint256_to_shortstr(hash)
+    def __init__(self, log):
+        self.pool = {}
+        self.log = log
 
-		if hash in self.pool:
-			self.log.write("MemPool.add(%s): already known" % (hashstr,))
-			return False
-		if not tx.is_valid():
-			self.log.write("MemPool.add(%s): invalid TX" % (hashstr, ))
-			return False
+    def add(self, tx):
+        tx.calc_sha256()
+        hash = tx.sha256
+        hashstr = uint256_to_shortstr(hash)
 
-		self.pool[hash] = tx
+        if hash in self.pool:
+            self.log.write("MemPool.add(%s): already known" % (hashstr,))
+            return False
+        if not tx.is_valid():
+            self.log.write("MemPool.add(%s): invalid TX" % (hashstr, ))
+            return False
 
-		self.log.write("MemPool.add(%s), poolsz %d" % (hashstr, len(self.pool)))
+        self.pool[hash] = tx
 
-		return True
+        self.log.write("MemPool.add(%s), poolsz %d" %
+                       (hashstr, len(self.pool)))
 
-	def remove(self, hash):
-		if hash not in self.pool:
-			return False
+        return True
 
-		del self.pool[hash]
-		return True
+    def remove(self, hash):
+        if hash not in self.pool:
+            return False
 
-	def size(self):
-		return len(self.pool)
+        del self.pool[hash]
+        return True
 
-
+    def size(self):
+        return len(self.pool)
