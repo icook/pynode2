@@ -432,7 +432,7 @@ class Manager(object):
 
         # connect to specified remote node
         #c = peermgr.add(settings['host'], settings['port'])
-        #threads.append(c)
+        # threads.append(c)
 
         gevent.signal(signal.SIGHUP, exit, "SIGHUP")
         gevent.signal(signal.SIGINT, exit, "SIGINT")
