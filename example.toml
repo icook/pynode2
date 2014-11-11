@@ -6,3 +6,4 @@ rpcport = 9332
 db = "/home/isaac2/programming/pynode2/chaindb"
 chain = "bitcoin_testnet"
 datadir = "/home/isaac2/programming/pynode2"
+ui_address = "localhost:8888"

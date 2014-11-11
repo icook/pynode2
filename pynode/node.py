@@ -28,6 +28,7 @@ import bitcoin.net as net
 from .mem_pool import MemPool
 from .chain_db import ChainDb
 from .networks import networks
+from .ui import ServerMonitor
 
 MY_SUBVERSION = "/pynode2:0.1.0/"
 
@@ -37,6 +38,7 @@ class NodeConn(Greenlet):
     def __init__(self, dstaddr, dstport, manager):
         Greenlet.__init__(self)
         self.log = logging.getLogger(self.__class__.__name__)
+        self.settings = manager.settings
         self.peermgr = manager.peermgr
         self.mempool = manager.mempool
         self.chaindb = manager.chaindb
@@ -46,6 +48,7 @@ class NodeConn(Greenlet):
         self.dstport = dstport
         self.sock = gevent.socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.recvbuf = ""
+        self.client_version = ""
         self.ver_send = self.params.MIN_PROTO_VERSION
         self.ver_recv = self.params.PROTO_VERSION
         self.last_sent = 0
@@ -213,6 +216,7 @@ class NodeConn(Greenlet):
             if self.ver_send >= self.params.CADDR_TIME_VERSION:
                 self.send_message(messages.msg_getaddr(self.ver_send))
             self.request_latest()
+            self.client_version = message.strSubVer
 
         elif message.command == "verack":
             self.ver_recv = self.ver_send
@@ -446,6 +450,7 @@ class Manager(object):
     defaults = dict(host="127.0.0.1",
                     rpcpass=None,
                     rpcuser=None,
+                    ui_address=None,
                     port=8333,
                     rpcport=9332,
                     db="/tmp/chaindb",
@@ -482,6 +487,9 @@ class Manager(object):
         self.mempool = MemPool()
         self.chaindb = ChainDb(self)
         self.peermgr = PeerManager(self)
+        if self.settings['ui_address']:
+            self.monitor = ServerMonitor(self)
+            self.monitor.start()
 
         # connect to all seed nodes
         for name, dns in self.params.DNS_SEEDS:
