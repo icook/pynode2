@@ -380,8 +380,9 @@ class ChainDb(object):
         try:
             chk_hash = self.params.CHECKPOINTS[blkmeta.height]
             if chk_hash != serialize.uint256_from_str(block.GetHash()):
-                self.log.info("Block {} does not match checkpoint hash {}, height {}"
-                              .format(block.GetHash().encode('hex'), chk_hash, blkmeta.height))
+                self.log.info(
+                    "Block {} does not match checkpoint hash {}, height {}"
+                    .format(block.GetHash().encode('hex'), chk_hash, blkmeta.height))
                 return False
         except KeyError:
             pass
@@ -389,7 +390,8 @@ class ChainDb(object):
         # check TX connectivity
         outpts = self.spent_outpts(block)
         if outpts is None:
-            self.log.info("Unconnectable block %064x" % (block.GetHash(), ))
+            self.log.info("Unconnectable block {}"
+                          .format(block.GetHash().encode('hex')))
             return False
 
         # verify script signatures
