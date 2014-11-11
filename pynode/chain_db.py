@@ -11,12 +11,10 @@ import cStringIO
 import leveldb
 import io
 import os
-import time
 import logging
 import bitcoin.core.serialize as serialize
 import bitcoin.core as core
 
-from decimal import Decimal
 from bitcoin.messages import msg_block
 from bitcoin.core.scripteval import VerifySignature
 
@@ -110,6 +108,9 @@ class HeightIdx(object):
 
 
 class ChainDb(object):
+    """ Manages a blockchain database. This implementation uses leveldb to
+    store index information and a raw blocks.dat like file to store complete
+    network blocks as recieved from network. """
 
     def __init__(self, manager):
         self.log = logging.getLogger(self.__class__.__name__)
@@ -135,7 +136,7 @@ class ChainDb(object):
         try:
             self.db.Get('misc:height')
         except KeyError:
-            self.log.info("INITIALIZING EMPTY BLOCKCHAIN DATABASE")
+            self.log.info("Initializing empty blockchain database")
             batch = leveldb.WriteBatch()
             batch.Put('misc:height', str(-1))
             batch.Put('misc:msg_start', self.params.MESSAGE_START)
@@ -153,6 +154,7 @@ class ChainDb(object):
             raise RuntimeError
 
     def puttxidx(self, txhash, txidx, batch=None):
+        """ Puts a serialized TxIdx object into the datastore. """
         try:
             self.db.Get('tx:' + txhash)
             old_txidx = self.gettxidx(txhash)
@@ -167,6 +169,8 @@ class ChainDb(object):
         return True
 
     def gettxidx(self, txhash):
+        """ Retrieves a serialized TxIdx object from the datastore. Returns a
+        TxIdx object."""
         try:
             ser_value = self.db.Get('tx:' + txhash)
         except KeyError:
@@ -181,6 +185,10 @@ class ChainDb(object):
         return txidx
 
     def gettx(self, txhash):
+        """ Looks up a raw transaction from a given transaction hash. Uses the
+        stored TxIdx objects (key "tx:*") to find the associated blockhash.
+        Block is then retrieved and deserialized in order to retrieve
+        transaction. """
         txidx = self.gettxidx(txhash)
         if txidx is None:
             return None
@@ -195,6 +203,7 @@ class ChainDb(object):
         return None
 
     def haveblock(self, blkhash, checkorphans=True):
+        """ Determines if we know of a block. Checks cache, then datastore. """
         if self.blk_cache.exists(blkhash):
             return True
         if checkorphans and blkhash in self.orphans:
@@ -206,13 +215,18 @@ class ChainDb(object):
             return False
 
     def have_prevblock(self, block):
-        if self.getheight() < 0 and block.GetHash() == self.params.GENESIS_BLOCK.GetHash():
+        """ Checks if we know of the block before the given block. """
+        if (self.getheight() < 0 and
+                block.GetHash() == self.params.GENESIS_BLOCK.GetHash()):
             return True
         if self.haveblock(block.hashPrevBlock, checkorphans=False):
             return True
         return False
 
     def getblock(self, blkhash):
+        """ Loads a given block from the raw blocks.dat file. Uses the file
+        position number that is stored in the datastore to seek to the right
+        spot in the file. """
         block = self.blk_cache.get(blkhash)
         if block is not None:
             return block
@@ -235,6 +249,7 @@ class ChainDb(object):
         return block
 
     def spend_txout(self, txhash, n_idx, batch=None):
+        """ Mark a transaction as "spent" in the datastore. """
         txidx = self.gettxidx(txhash)
         if txidx is None:
             return False
@@ -245,6 +260,7 @@ class ChainDb(object):
         return True
 
     def clear_txout(self, txhash, n_idx, batch=None):
+        """ Mark a transaction as "unspent" in the datastore. """
         txidx = self.gettxidx(txhash)
         if txidx is None:
             return False
@@ -271,6 +287,8 @@ class ChainDb(object):
         return (outpts, txmap)
 
     def txout_spent(self, txout):
+        """ Return whether a transaction is marked as spent in the datastore.
+        """
         txidx = self.gettxidx(txout.hash)
         if txidx is None:
             return None
@@ -339,9 +357,9 @@ class ChainDb(object):
                 try:
                     txfrom = self.mempool.pool[txin.prevout.hash]
                 except:
-                    self.log.info("TX %064x/%d no-dep %064x" %
-                                  (tx.GetHash(), i,
-                                   txin.prevout.hash))
+                    self.log.info("TX {}/{} no-dep {}".format(
+                        tx.GetHash().encode('hex'), i,
+                        txin.prevout.hash.encode('hex')))
                     return False
             if txfrom is None:
                 self.log.info("TX {}/{} no-dep {}"
@@ -350,7 +368,8 @@ class ChainDb(object):
                 return False
 
             if not VerifySignature(txfrom, tx, i):
-                self.log.info("TX {}/{} sigfail".format(tx.GetHash().encode('hex'), i))
+                self.log.info("TX {}/{} sigfail".format(
+                    tx.GetHash().encode('hex'), i))
                 return False
 
         return True
@@ -491,7 +510,7 @@ class ChainDb(object):
         return meta.height
 
     def reorganize(self, new_best_blkhash):
-        self.log.info("REORGANIZE")
+        self.log.info("Reorganize start ========")
 
         conn = []
         disconn = []
@@ -521,15 +540,14 @@ class ChainDb(object):
 
         self.log.info("REORG disconnecting top hash {}"
                       .format(old_best_blkhash.encode('hex')))
-        self.log.info("REORG connecting new top hash {}"
-                      .format(new_best_blkhash.encode('hex')))
-        self.log.info("REORG chain union point {}".format(fork.encode('hex')))
-        self.log.info("REORG disconnecting %d blocks, connecting %d blocks" % (
-            len(disconn), len(conn)))
 
         for block in disconn:
             if not self.disconnect_block(block):
                 return False
+
+        self.log.info("REORG connecting new top hash {}"
+                      .format(new_best_blkhash.encode('hex')))
+        self.log.info("REORG chain union point {}".format(fork.encode('hex')))
 
         for block in conn:
             if not self.connect_block(block.GetHash(),
@@ -537,7 +555,10 @@ class ChainDb(object):
                                       self.getblockmeta(block.GetHash())):
                 return False
 
-        self.log.info("REORGANIZE DONE")
+        self.log.info("REORG disconnected %d blocks, connected %d blocks" % (
+            len(disconn), len(conn)))
+
+        self.log.info("Reorganize end =========")
         return True
 
     def set_best_chain(self, ser_prevhash, ser_hash, block, blkmeta):
@@ -661,7 +682,7 @@ class ChainDb(object):
 
     def loadfile(self, filename):
         fd = os.open(filename, os.O_RDONLY)
-        self.log.info("IMPORTING DATA FROM " + filename)
+        self.log.info("Importing data from " + filename)
         buf = ''
         wanted = 4096
         while True:
@@ -700,118 +721,3 @@ class ChainDb(object):
             block.deserialize(f)
 
             self.putblock(block)
-
-    def newblock_txs(self):
-        txlist = []
-        for tx in self.mempool.pool.itervalues():
-
-            # query finalized, non-coinbase mempool tx's
-            if tx.is_coinbase() or not tx.is_final():
-                continue
-
-            # iterate through inputs, calculate total input value
-            valid = True
-            nValueIn = 0
-            nValueOut = 0
-            dPriority = Decimal(0)
-
-            for tin in tx.vin:
-                in_tx = self.gettx(tin.prevout.hash)
-                if (in_tx is None or
-                        tin.prevout.n >= len(in_tx.vout)):
-                    valid = False
-                else:
-                    v = in_tx.vout[tin.prevout.n].nValue
-                    nValueIn += v
-                    dPriority += Decimal(v * 1)
-
-            if not valid:
-                continue
-
-            # iterate through outputs, calculate total output value
-            for txout in tx.vout:
-                nValueOut += txout.nValue
-
-            # calculate fees paid, if any
-            tx.nFeesPaid = nValueIn - nValueOut
-            if tx.nFeesPaid < 0:
-                continue
-
-            # calculate fee-per-KB and priority
-            tx.ser_size = len(tx.serialize())
-
-            dPriority /= Decimal(tx.ser_size)
-
-            tx.dFeePerKB = (Decimal(tx.nFeesPaid) /
-                            (Decimal(tx.ser_size) / Decimal(1000)))
-            if tx.dFeePerKB < Decimal(50000):
-                tx.dFeePerKB = Decimal(0)
-            tx.dPriority = dPriority
-
-            txlist.append(tx)
-
-        # sort list by fee-per-kb, then priority
-        sorted_txlist = sorted(txlist, cmp=tx_blk_cmp, reverse=True)
-
-        # build final list of transactions.  thanks to sort
-        # order above, we add TX's to the block in the
-        # highest-fee-first order.  free transactions are
-        # then appended in order of priority, until
-        # free_bytes is exhausted.
-        txlist = []
-        txlist_bytes = 0
-        free_bytes = 50000
-        while len(sorted_txlist) > 0:
-            tx = sorted_txlist.pop()
-            if txlist_bytes + tx.ser_size > (900 * 1000):
-                continue
-
-            if tx.dFeePerKB > 0:
-                txlist.append(tx)
-                txlist_bytes += tx.ser_size
-            elif free_bytes >= tx.ser_size:
-                txlist.append(tx)
-                txlist_bytes += tx.ser_size
-                free_bytes -= tx.ser_size
-
-        return txlist
-
-    def newblock(self):
-        tophash = self.gettophash()
-        prevblock = self.getblock(tophash)
-        if prevblock is None:
-            return None
-
-        # obtain list of candidate transactions for a new block
-        total_fees = 0
-        txlist = self.newblock_txs()
-        for tx in txlist:
-            total_fees += tx.nFeesPaid
-
-        #
-        # build coinbase
-        #
-        txin = core.CTxIn()
-        txin.prevout.set_null()
-        # FIXME: txin.scriptSig
-
-        txout = core.CTxOut()
-        txout.nValue = block_value(self.getheight(), total_fees)
-        # FIXME: txout.scriptPubKey
-
-        coinbase = core.CTransaction()
-        coinbase.vin.append(txin)
-        coinbase.vout.append(txout)
-
-        #
-        # build block
-        #
-        block = core.CBlock()
-        block.hashPrevBlock = tophash
-        block.nTime = int(time.time())
-        block.nBits = prevblock.nBits  # TODO: wrong
-        block.vtx.append(coinbase)
-        block.vtx.extend(txlist)
-        block.hashMerkleRoot = block.calc_merkle()
-
-        return block
