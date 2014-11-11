@@ -23,7 +23,7 @@ git clone https://github.com/icook/pynode2
 cd pynode2
 pip install -r requirements.txt
 pip install -e .
-pynode2 example.toml
+pynode example.toml
 ```
 
 Currently there are no more automated ways to install. This may change if
