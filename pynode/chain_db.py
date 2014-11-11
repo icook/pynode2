@@ -194,7 +194,7 @@ class ChainDb(object):
                       (txhash, txidx.blkhash))
         return None
 
-    def haveblock(self, blkhash, checkorphans):
+    def haveblock(self, blkhash, checkorphans=True):
         if self.blk_cache.exists(blkhash):
             return True
         if checkorphans and blkhash in self.orphans:
@@ -208,7 +208,7 @@ class ChainDb(object):
     def have_prevblock(self, block):
         if self.getheight() < 0 and block.GetHash() == self.params.GENESIS_BLOCK.GetHash():
             return True
-        if self.haveblock(block.hashPrevBlock, False):
+        if self.haveblock(block.hashPrevBlock, checkorphans=False):
             return True
         return False
 
@@ -608,9 +608,10 @@ class ChainDb(object):
         self.db.Write(batch)
 
         # if chain is not best chain, proceed no further
-        if (blkmeta.work <= top_work):
+        if blkmeta.work <= top_work:
             self.log.info(
-                "ChainDb: height %d (weak), block %064x" % (blkmeta.height, block.GetHash()))
+                "height {} (weak), block {}"
+                .format(blkmeta.height, block.GetHash().encode('hex')))
             return True
 
         # update global chain pointers

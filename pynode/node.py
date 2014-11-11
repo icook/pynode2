@@ -47,7 +47,7 @@ class NodeConn(Greenlet):
         self.sock = gevent.socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.recvbuf = ""
         self.ver_send = self.params.MIN_PROTO_VERSION
-        self.ver_recv = self.params.MIN_PROTO_VERSION
+        self.ver_recv = self.params.PROTO_VERSION
         self.last_sent = 0
         self.getblocks_ok = True
         self.last_block_rx = time.time()
@@ -69,6 +69,10 @@ class NodeConn(Greenlet):
         vt.addrTo.port = self.dstport
         vt.addrFrom.ip = "0.0.0.0"
         vt.addrFrom.port = 0
+        if self.settings['spv']:
+            vt.nServices = 0
+        else:
+            vt.nServices = 1
         vt.nStartingHeight = self.chaindb.getheight()
         vt.strSubVer = MY_SUBVERSION
         self.send_message(vt)
@@ -142,7 +146,36 @@ class NodeConn(Greenlet):
         except:
             self.handle_close()
 
-    def send_getblocks(self, timecheck=True):
+    def send_getheaders(self):
+        our_height = self.chaindb.getheight()
+        if our_height < 0:
+            tophash = self.params.GENESIS_BLOCK.GetHash()
+        elif our_height < self.remote_height:
+            tophash = self.chaindb.gettophash()
+        else:
+            return
+
+        gb = messages.msg_getheaders(protover=self.ver_send)
+        if our_height >= 0:
+            gb.locator.vHave.append(tophash)
+        self.send_message(gb)
+
+    def send_getblocks(self):
+        our_height = self.chaindb.getheight()
+        if our_height < 0:
+            gd = messages.msg_getdata(protover=self.ver_send)
+            inv = net.CInv()
+            inv.type = 2
+            inv.hash = self.params.GENESIS_BLOCK.GetHash()
+            gd.inv.append(inv)
+            self.send_message(gd)
+        elif our_height < self.remote_height:
+            gb = messages.msg_getblocks(protover=self.ver_send)
+            if our_height >= 0:
+                gb.locator.vHave.append(self.chaindb.gettophash())
+            self.send_message(gb)
+
+    def request_latest(self, timecheck=True):
         if not self.getblocks_ok:
             return
         now = time.time()
@@ -150,19 +183,10 @@ class NodeConn(Greenlet):
             return
         self.last_getblocks = now
 
-        our_height = self.chaindb.getheight()
-        if our_height < 0:
-            gd = messages.msg_getdata(self.ver_send)
-            inv = net.CInv()
-            inv.type = 2
-            inv.hash = self.params.GENESIS_BLOCK.GetHash()
-            gd.inv.append(inv)
-            self.send_message(gd)
-        elif our_height < self.remote_height:
-            gb = messages.msg_getblocks(self.ver_send)
-            if our_height >= 0:
-                gb.locator.vHave.append(self.chaindb.gettophash())
-            self.send_message(gb)
+        if self.settings['spv']:
+            self.send_getheaders()
+        else:
+            self.send_getblocks()
 
     def got_message(self, message):
         gevent.sleep()
@@ -188,7 +212,7 @@ class NodeConn(Greenlet):
             self.send_message(messages.msg_verack(self.ver_send))
             if self.ver_send >= self.params.CADDR_TIME_VERSION:
                 self.send_message(messages.msg_getaddr(self.ver_send))
-            self.send_getblocks()
+            self.request_latest()
 
         elif message.command == "verack":
             self.ver_recv = self.ver_send
@@ -209,7 +233,7 @@ class NodeConn(Greenlet):
             if (len(message.inv) == 1 and
                     message.inv[0].type == messages.MSG_BLOCK and
                     self.chaindb.haveblock(message.inv[0].hash, True)):
-                self.send_getblocks(False)
+                self.request_latest(False)
                 return
 
             want = messages.msg_getdata(self.ver_send)
@@ -234,6 +258,10 @@ class NodeConn(Greenlet):
                 self.mempool.add(message.tx)
 
         elif message.command == "block":
+            self.chaindb.putblock(message.block)
+            self.last_block_rx = time.time()
+
+        elif message.command == "headers":
             self.chaindb.putblock(message.block)
             self.last_block_rx = time.time()
 
@@ -269,7 +297,7 @@ class NodeConn(Greenlet):
         # and we're still not caught up, send another getblocks
         last_blkmsg = time.time() - self.last_block_rx
         if last_blkmsg > 5:
-            self.send_getblocks()
+            self.request_latest()
 
     def getdata_tx(self, txhash):
         if txhash in self.mempool.pool:
@@ -421,6 +449,7 @@ class Manager(object):
                     port=8333,
                     rpcport=9332,
                     db="/tmp/chaindb",
+                    spv=False,
                     datadir="/tmp/pynode_datadir",
                     chain="bitcoin_mainnet")
 
