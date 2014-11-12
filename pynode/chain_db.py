@@ -7,7 +7,7 @@
 
 import struct
 import string
-import cStringIO
+import io
 import leveldb
 import io
 import os
@@ -134,18 +134,18 @@ class ChainDb(object):
         self.db = leveldb.LevelDB(self.settings['datadir'] + '/leveldb')
 
         try:
-            self.db.Get('misc:height')
+            self.db.Get(b'misc:height')
         except KeyError:
             self.log.info("Initializing empty blockchain database")
             batch = leveldb.WriteBatch()
-            batch.Put('misc:height', str(-1))
-            batch.Put('misc:msg_start', self.params.MESSAGE_START)
-            batch.Put('misc:tophash', hex(0L))
-            batch.Put('misc:total_work', hex(0L))
+            batch.Put(b'misc:height', str(-1))
+            batch.Put(b'misc:msg_start', self.params.MESSAGE_START)
+            batch.Put(b'misc:tophash', hex(0))
+            batch.Put(b'misc:total_work', hex(0))
             self.db.Write(batch)
 
         try:
-            start = self.db.Get('misc:msg_start')
+            start = self.db.Get(b'misc:msg_start')
             if start != self.params.MESSAGE_START:
                 raise KeyError
         except KeyError:
@@ -156,14 +156,14 @@ class ChainDb(object):
     def puttxidx(self, txhash, txidx, batch=None):
         """ Puts a serialized TxIdx object into the datastore. """
         try:
-            self.db.Get('tx:' + txhash)
+            self.db.Get(b'tx:' + txhash)
             old_txidx = self.gettxidx(txhash)
             self.log.warn("overwriting duplicate TX {}, height {}, oldblk {}, oldspent {}, newblk {}".format(
                 txhash.encode('hex'), self.getheight(), old_txidx.blkhash.encode('hex'), old_txidx.spentmask, txidx.blkhash.encode('hex')))
         except KeyError:
             pass
         batch = self.db if batch is not None else batch
-        batch.Put('tx:' + txhash,
+        batch.Put(b'tx:' + txhash,
                   txidx.blkhash.encode('hex') + ' ' + hex(txidx.spentmask))
 
         return True
@@ -172,7 +172,7 @@ class ChainDb(object):
         """ Retrieves a serialized TxIdx object from the datastore. Returns a
         TxIdx object."""
         try:
-            ser_value = self.db.Get('tx:' + txhash)
+            ser_value = self.db.Get(b'tx:' + txhash)
         except KeyError:
             return None
 
@@ -209,7 +209,7 @@ class ChainDb(object):
         if checkorphans and blkhash in self.orphans:
             return True
         try:
-            self.db.Get('blocks:' + blkhash)
+            self.db.Get(b'blocks:' + blkhash)
             return True
         except KeyError:
             return False
@@ -233,7 +233,7 @@ class ChainDb(object):
 
         try:
             # Lookup the block index, seek in the file
-            fpos = long(self.db.Get('blocks:' + blkhash))
+            fpos = long(self.db.Get(b'blocks:' + blkhash))
             self.blk_read.seek(fpos)
 
             # read and decode "block" msg
@@ -423,14 +423,15 @@ class ChainDb(object):
 
                 if not self.tx_signed(tx, block, False):
                     self.log.info(
-                        "Invalid signature in block {}".format(block.GetHash().encode('hex')))
+                        "Invalid signature in block {}".format(
+                            block.GetHash().encode('hex')))
                     return False
 
         # update database pointers for best chain
         batch = leveldb.WriteBatch()
-        batch.Put('misc:total_work', hex(blkmeta.work))
-        batch.Put('misc:height', str(blkmeta.height))
-        batch.Put('misc:tophash', ser_hash)
+        batch.Put(b'misc:total_work', hex(blkmeta.work))
+        batch.Put(b'misc:height', str(blkmeta.height))
+        batch.Put(b'misc:tophash', ser_hash)
 
         self.log.info("height {}, block {}".format(
             blkmeta.height, block.GetHash().encode('hex')))
@@ -459,7 +460,7 @@ class ChainDb(object):
 
     def disconnect_block(self, block):
         prevmeta = BlkMeta()
-        prevmeta.deserialize(self.db.Get('blkmeta:' + block.hashPrevBlock))
+        prevmeta.deserialize(self.db.Get(b'blkmeta:' + block.hashPrevBlock))
 
         tup = self.unique_outpts(block)
         if tup is None:
@@ -483,9 +484,9 @@ class ChainDb(object):
                 self.mempool.add(tx)
 
         # update database pointers for best chain
-        batch.Put('misc:total_work', hex(prevmeta.work))
-        batch.Put('misc:height', str(prevmeta.height))
-        batch.Put('misc:tophash', block.hashPrevBlock)
+        batch.Put(b'misc:total_work', hex(prevmeta.work))
+        batch.Put(b'misc:height', str(prevmeta.height))
+        batch.Put(b'misc:tophash', block.hashPrevBlock)
         self.db.Write(batch)
 
         self.log.info("disconnect: height {}, block {}".format(
@@ -496,7 +497,7 @@ class ChainDb(object):
     def getblockmeta(self, blkhash):
         try:
             meta = BlkMeta()
-            meta.deserialize(self.db.Get('blkmeta:' + blkhash))
+            meta.deserialize(self.db.Get(b'blkmeta:' + blkhash))
         except KeyError:
             return None
 
@@ -564,7 +565,7 @@ class ChainDb(object):
     def set_best_chain(self, ser_prevhash, ser_hash, block, blkmeta):
         # the easy case, extending current best chain
         if (blkmeta.height == 0 or
-                self.db.Get('misc:tophash') == ser_prevhash):
+                self.db.Get(b'misc:tophash') == ser_prevhash):
             return self.connect_block(ser_hash, block, blkmeta)
 
         # switching from current chain to another, stronger chain
@@ -587,19 +588,19 @@ class ChainDb(object):
             return False
 
         top_height = self.getheight()
-        top_work = long(self.db.Get('misc:total_work'), 16)
+        top_work = long(self.db.Get(b'misc:total_work'), 16)
 
         # read metadata for previous block
         prevmeta = BlkMeta()
         if top_height >= 0:
-            prevmeta.deserialize(self.db.Get('blkmeta:' + block.hashPrevBlock))
+            prevmeta.deserialize(self.db.Get(b'blkmeta:' + block.hashPrevBlock))
 
         batch = leveldb.WriteBatch()
 
         # build network "block" msg, as canonical disk storage form
         msg = msg_block()
         msg.block = block
-        f = cStringIO.StringIO()
+        f = io.BytesIO()
         msg.msg_ser(f)
         msg_data = f.getvalue()
 
@@ -609,25 +610,25 @@ class ChainDb(object):
         self.blk_write.flush()
 
         # add index entry
-        batch.Put('blocks:' + block.GetHash(), str(fpos))
+        batch.Put(b'blocks:' + block.GetHash(), str(fpos))
 
         # store metadata related to this block
         blkmeta = BlkMeta()
         blkmeta.height = prevmeta.height + 1
         blkmeta.work = (prevmeta.work +
                         serialize.uint256_from_compact(block.nBits))
-        batch.Put('blkmeta:' + block.GetHash(), blkmeta.serialize())
+        batch.Put(b'blkmeta:' + block.GetHash(), blkmeta.serialize())
 
         # store list of blocks at this height
         heightidx = HeightIdx()
         heightstr = str(blkmeta.height)
         try:
-            heightidx.deserialize(self.db.Get('height:' + heightstr))
+            heightidx.deserialize(self.db.Get(b'height:' + heightstr))
         except KeyError:
             pass
         heightidx.blocks.append(block.GetHash())
 
-        batch.Put('height:' + heightstr, heightidx.serialize())
+        batch.Put(b'height:' + heightstr, heightidx.serialize())
         self.db.Write(batch)
 
         # if chain is not best chain, proceed no further
@@ -670,15 +671,15 @@ class ChainDb(object):
         for hash in locator.vHave:
             if hash in self.blkmeta:
                 blkmeta = BlkMeta()
-                blkmeta.deserialize(self.db.Get('blkmeta:' + hash))
+                blkmeta.deserialize(self.db.Get(b'blkmeta:' + hash))
                 return blkmeta
         return 0
 
     def getheight(self):
-        return int(self.db.Get('misc:height'))
+        return int(self.db.Get(b'misc:height'))
 
     def gettophash(self):
-        return self.db.Get('misc:tophash')
+        return self.db.Get(b'misc:tophash')
 
     def loadfile(self, filename):
         fd = os.open(filename, os.O_RDONLY)
@@ -716,7 +717,7 @@ class ChainDb(object):
             ser_blk = buf[blkpos:blkpos + blksize]
             buf = buf[blkpos + blksize:]
 
-            f = cStringIO.StringIO(ser_blk)
+            f = io.BytesIO(ser_blk)
             block = core.CBlock()
             block.deserialize(f)
 

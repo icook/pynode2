@@ -15,7 +15,7 @@ import socket
 import time
 import sys
 import random
-import cStringIO
+import io
 import copy
 import hashlib
 import logging
@@ -131,7 +131,7 @@ class NodeConn(Greenlet):
             self.recvbuf = self.recvbuf[4 + 12 + 4 + 4 + msglen:]
 
             if command in messages.messagemap:
-                f = cStringIO.StringIO(msg)
+                f = io.BytesIO(msg)
                 cls = messages.messagemap[command]
                 t = cls.msg_deser(f, protover=self.ver_send)
                 self.got_message(t)
